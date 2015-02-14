@@ -17,8 +17,8 @@ namespace Combot.IRCServices.Messaging
         public event EventHandler<ServerNotice> ServerNoticeReceivedEvent;
         public event EventHandler<ChannelNotice> ChannelNoticeReceivedEvent;
         public event EventHandler<PrivateNotice> PrivateNoticeReceivedEvent;
-        public event EventHandler<CTCPMessage> CTCPMessageRecievedEvent;
-        public event EventHandler<CTCPMessage> CTCPNoticeRecievedEvent; 
+        public event EventHandler<CTCPMessage> CTCPMessageReceivedEvent;
+        public event EventHandler<CTCPMessage> CTCPNoticeReceivedEvent; 
         public event EventHandler<TopicChangeInfo> TopicChangeEvent;
         public event EventHandler<ChannelModeChangeInfo> ChannelModeChangeEvent;
         public event EventHandler<UserModeChangeInfo> UserModeChangeEvent;
@@ -132,9 +132,9 @@ namespace Combot.IRCServices.Messaging
 
                                     await Task.Run(() =>
                                     {
-                                        if (CTCPMessageRecievedEvent != null)
+                                        if (CTCPMessageReceivedEvent != null)
                                         {
-                                            CTCPMessageRecievedEvent(this, ctcpMessage);
+                                            CTCPMessageReceivedEvent(this, ctcpMessage);
                                         }
                                     });
                                 }
@@ -198,9 +198,9 @@ namespace Combot.IRCServices.Messaging
 
                                     await Task.Run(() =>
                                     {
-                                        if (CTCPNoticeRecievedEvent != null)
+                                        if (CTCPNoticeReceivedEvent != null)
                                         {
-                                            CTCPNoticeRecievedEvent(this, ctcpMessage);
+                                            CTCPNoticeReceivedEvent(this, ctcpMessage);
                                         }
                                     });
                                 }
@@ -275,7 +275,7 @@ namespace Combot.IRCServices.Messaging
                                         {
                                             set = true;
                                         }
-                                        else
+                                        else if (mode.ToString() != string.Empty)
                                         {
                                             UserModeInfo newMode = new UserModeInfo();
                                             newMode.Set = set;
@@ -312,7 +312,7 @@ namespace Combot.IRCServices.Messaging
                             case "NICK":
                                 NickChangeInfo nickMsg = new NickChangeInfo();
                                 nickMsg.OldNick = new Nick() { Nickname = senderNick, Realname = senderRealname, Host = senderHost };
-                                nickMsg.NewNick = new Nick() { Nickname = recipient.Remove(0, 1) };
+                                nickMsg.NewNick = new Nick() { Nickname = recipient.TrimStart(':') };
 
                                 await Task.Run(() =>
                                 {
@@ -390,7 +390,7 @@ namespace Combot.IRCServices.Messaging
                             case "QUIT":
                                 QuitInfo quitMsg = new QuitInfo();
                                 quitMsg.Nick = new Nick() { Nickname = senderNick, Realname = senderRealname, Host = senderHost };
-                                quitMsg.Message = recipient.Remove(0, 1);
+                                quitMsg.Message = string.Join(" ", recipient.Remove(0, 1), args);
 
                                 await Task.Run(() =>
                                 {
@@ -445,11 +445,12 @@ namespace Combot.IRCServices.Messaging
                     }
                 }
 
+                string rawMessage = message;
                 await Task.Run(() =>
                 {
                     if (RawMessageEvent != null)
                     {
-                        RawMessageEvent(this, message);
+                        RawMessageEvent(this, rawMessage);
                     }
                 });
             }
@@ -462,7 +463,6 @@ namespace Combot.IRCServices.Messaging
             reply.Match = match;
             ServerReplyEvent += (sender, e) => HandleReply(sender, e, reply);
             reply.Ready.Wait(TimeSpan.FromMilliseconds(5000));
-            ServerReplyEvent -= (obj, e) => HandleReply(obj, e, reply);
             return reply.Result;
         }
 
@@ -473,7 +473,6 @@ namespace Combot.IRCServices.Messaging
             error.Match = match;
             ServerReplyEvent += (sender, e) => HandleError(sender, e, error);
             error.Ready.Wait(TimeSpan.FromMilliseconds(5000));
-            ServerReplyEvent -= (sender, e) => HandleError(sender, e, error);
             return error.Result;
         }
 

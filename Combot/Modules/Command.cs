@@ -95,7 +95,7 @@ namespace Combot.Modules
                         {
                             CommandArgument.DependentArgumentInfo checkedArgument = Arguments[i].DependentArguments.Find(dep => Arguments.Exists(val => val.Name == dep.Name));
                             int argIndex = validArguments.FindIndex(arg => arg.Name == checkedArgument.Name);
-                            if (passedArgs.Count > argIndex)
+                            if (passedArgs.Count > argIndex && argIndex >= 0)
                             {
                                 if (checkedArgument.Values.Exists(check => check.ToLower() == passedArgs[argIndex].ToLower()))
                                 {
@@ -103,12 +103,6 @@ namespace Combot.Modules
                                     newArgument.Copy(Arguments[i]);
                                     validArguments.Add(newArgument);
                                 }
-                            }
-                            else
-                            {
-                                CommandArgument newArgument = new CommandArgument();
-                                newArgument.Copy(Arguments[i]);
-                                validArguments.Add(newArgument);
                             }
                         }
                     }

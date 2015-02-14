@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
@@ -16,8 +17,8 @@ namespace Combot.Modules.Plugins
         {
             listLock = new ReaderWriterLockSlim();
             versionList = new List<VersionItem>();
-            Bot.IRC.Message.CTCPMessageRecievedEvent += HandleVersionQuery;
-            Bot.IRC.Message.CTCPNoticeRecievedEvent += HandleVersionResponse;
+            Bot.IRC.Message.CTCPMessageReceivedEvent += HandleVersionQuery;
+            Bot.IRC.Message.CTCPNoticeReceivedEvent += HandleVersionResponse;
             Bot.CommandReceivedEvent += HandleCommandEvent;
         }
 
@@ -42,43 +43,46 @@ namespace Combot.Modules.Plugins
                     }
                     versionList.Add(tmpItem);
                     listLock.ExitWriteLock();
-                    Bot.IRC.SendCTCPMessage(nickList[i], "VERSION");
+                    Bot.IRC.Command.SendCTCPMessage(nickList[i], "VERSION");
                 }
             }
         }
 
         public void HandleVersionQuery(object sender, CTCPMessage message)
         {
-            if (message.Command.ToLower() == "version")
+            if (Enabled
+                && !Bot.ServerConfig.NickBlacklist.Contains(message.Sender.Nickname)
+                && !NickBlacklist.Contains(message.Sender.Nickname))
             {
-                Bot.IRC.SendCTCPNotice(message.Sender.Nickname, "VERSION", string.Format("Combot v{0} on {1}", Assembly.GetExecutingAssembly().GetName().Version, GetOptionValue("Machine Reply")));
+                if (message.Command.ToLower() == "version")
+                {
+                    Assembly assembly = Assembly.GetExecutingAssembly();
+                    FileVersionInfo fileVersionInfo = FileVersionInfo.GetVersionInfo(assembly.Location);
+                    string version = fileVersionInfo.ProductVersion;
+                    Bot.IRC.Command.SendCTCPNotice(message.Sender.Nickname, "VERSION", string.Format("Combot v{0} on {1}", version, GetOptionValue("Machine Reply")));
+                }
             }
         }
 
         public void HandleVersionResponse(object sender, CTCPMessage message)
         {
-            if (message.Command == "VERSION")
+            if (Enabled
+                && !Bot.ServerConfig.NickBlacklist.Contains(message.Sender.Nickname)
+                && !NickBlacklist.Contains(message.Sender.Nickname))
             {
-                listLock.EnterReadLock();
-                VersionItem versionItem = versionList.Find(item => item.Nick.ToLower() == message.Sender.Nickname.ToLower());
-                listLock.ExitReadLock();
-                if (versionItem != null)
+                if (message.Command == "VERSION")
                 {
-                    switch (versionItem.MessageType)
+                    listLock.EnterReadLock();
+                    VersionItem versionItem = versionList.Find(item => item.Nick.ToLower() == message.Sender.Nickname.ToLower());
+                    listLock.ExitReadLock();
+                    if (versionItem != null)
                     {
-                        case MessageType.Channel:
-                            Bot.IRC.SendPrivateMessage(versionItem.Location, string.Format("[{0}] Using version: {1}", versionItem.Nick, message.Arguments));
-                            break;
-                        case MessageType.Query:
-                            Bot.IRC.SendPrivateMessage(message.Sender.Nickname, string.Format("[{0}] Using version: {1}", versionItem.Nick, message.Arguments));
-                            break;
-                        case MessageType.Notice:
-                            Bot.IRC.SendNotice(message.Sender.Nickname, string.Format("[{0}] Using version: {1}", versionItem.Nick, message.Arguments));
-                            break;
+                        string verResponse = string.Format("[{0}] Using version: {1}", versionItem.Nick, message.Arguments);
+                        SendResponse(versionItem.MessageType, versionItem.Location, message.Sender.Nickname, verResponse);
+                        listLock.EnterWriteLock();
+                        versionList.RemoveAll(item => item.Nick == versionItem.Nick);
+                        listLock.ExitWriteLock();
                     }
-                    listLock.EnterWriteLock();
-                    versionList.RemoveAll(item => item.Nick == versionItem.Nick);
-                    listLock.ExitWriteLock();
                 }
             }
         }

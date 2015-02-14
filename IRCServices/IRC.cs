@@ -9,6 +9,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using Combot.IRCServices.Messaging;
+using Combot.IRCServices.Commanding;
 using Combot.IRCServices.TCP;
 
 namespace Combot.IRCServices
@@ -17,15 +18,13 @@ namespace Combot.IRCServices
     {
         public List<Channel> Channels = new List<Channel>();
         public Messages Message;
+        public Commands Command;
         public event Action ConnectEvent;
         public event Action DisconnectEvent;
         public event Action<TCPError> TCPErrorEvent;
         public string Nickname;
         public Dictionary<string, PrivilegeMode> PrivilegeMapping = new Dictionary<string, PrivilegeMode>() { { "+", PrivilegeMode.v }, { "%", PrivilegeMode.h }, { "@", PrivilegeMode.o }, { "&", PrivilegeMode.a }, { "~", PrivilegeMode.q } };
 
-        private int MaxMessageLength;
-        private int MessageSendDelay;
-        private DateTime LastMessageSend;
         private int ReadTimeout;
         private int AllowedFailedReads;
         private Thread TCPReader;
@@ -38,11 +37,9 @@ namespace Combot.IRCServices
         {
             _TCP = new TCPInterface();
             Message = new Messages(this);
+            Command = new Commands(this, maxMessageLength, messageSendDelay);
             Nickname = string.Empty;
             ChannelRWLock = new ReaderWriterLockSlim();
-            LastMessageSend = DateTime.Now;
-            MaxMessageLength = maxMessageLength;
-            MessageSendDelay = messageSendDelay;
             ReadTimeout = readTimeout;
             AllowedFailedReads = allowedFailedReads;
 
@@ -99,13 +96,21 @@ namespace Combot.IRCServices
         /// Disconencts from the active TCP connection.
         /// </summary>
         /// <returns></returns>
-        public bool Disconnect()
+        public void Disconnect()
         {
-            bool result = false;
-
             if (_TCP.Connected)
             {
                 _TCP.Disconnect();
+            }
+
+            if (KeepAlive.IsAlive)
+            {
+                KeepAlive.Join();
+            }
+
+            if (TCPReader.IsAlive)
+            {
+                TCPReader.Join();
             }
 
             ChannelRWLock.EnterWriteLock();
@@ -116,8 +121,6 @@ namespace Combot.IRCServices
             {
                 DisconnectEvent();
             }
-
-            return result;
         }
 
         /// <summary>
@@ -128,8 +131,8 @@ namespace Combot.IRCServices
         public void Login(string serverName, Nick nick)
         {
             Nickname = nick.Nickname;
-            SendNick(nick.Nickname);
-            SendUser(nick.Username, nick.Host, serverName, nick.Realname);
+            Command.SendNick(nick.Nickname);
+            Command.SendUser(nick.Username, nick.Host, serverName, nick.Realname);
         }
 
         /// <summary>
@@ -258,7 +261,7 @@ namespace Combot.IRCServices
             return null;
         }
 
-        private void SendTCPMessage(string message)
+        internal void SendTCPMessage(string message)
         {
             if (_TCP.Connected)
             {
@@ -271,11 +274,11 @@ namespace Combot.IRCServices
         private void CheckConnection(IPAddress IP, int port)
         {
             int diconnectCount = 0;
-            bool stillConnected = true;
+            bool disconnectActivated = false;
             while (_TCP.Connected)
             {
-                Thread.Sleep(1000); 
-                stillConnected = NetworkInterface.GetIsNetworkAvailable();
+                Thread.Sleep(5000); 
+                bool stillConnected = NetworkInterface.GetIsNetworkAvailable();
 
                 if (stillConnected)
                 {
@@ -299,9 +302,13 @@ namespace Combot.IRCServices
                     diconnectCount = 0;
                 }
 
-                if (diconnectCount >= 5)
+                if (diconnectCount >= 5 && !disconnectActivated)
                 {
-                    Disconnect();
+                    disconnectActivated = true;
+                    Task.Run(() =>
+                    {
+                        Disconnect();
+                    });
                 }
             }
         }
@@ -313,7 +320,7 @@ namespace Combot.IRCServices
         /// <param name="e"></param>
         private void HandlePing(object sender, PingInfo e)
         {
-            SendPong(e.Message);
+            Command.SendPong(e.Message);
         }
 
         private void HandleTCPConnection(int e)
@@ -348,56 +355,59 @@ namespace Combot.IRCServices
                     case IRCReplyCode.RPL_WHOREPLY:
                         ChannelRWLock.EnterWriteLock();
                         string[] msgSplit = msg.Message.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                        string target = msgSplit[0];
-                        if (target.StartsWith("&") || target.StartsWith("#"))
+                        if (msgSplit.GetUpperBound(0) > 0)
                         {
-                            if (msgSplit.GetUpperBound(0) >= 7)
+                            string target = msgSplit[0];
+                            if (target.StartsWith("&") || target.StartsWith("#"))
                             {
-                                string nickname = msgSplit[4];
-                                string realname = msgSplit[7];
-                                string username = msgSplit[1];
-                                string host = msgSplit[2];
-                                string modeString = msgSplit[5];
-                                Channel channel = Channels.Find(chan => chan.Name == target);
-                                if (channel != null)
+                                if (msgSplit.GetUpperBound(0) >= 7)
                                 {
-                                    Nick nick = channel.GetNick(nickname);
-                                    bool nickFound = true;
-                                    if (nick == null)
+                                    string nickname = msgSplit[4];
+                                    string realname = msgSplit[7];
+                                    string username = msgSplit[1];
+                                    string host = msgSplit[2];
+                                    string modeString = msgSplit[5];
+                                    Channel channel = Channels.Find(chan => chan.Name == target);
+                                    if (channel != null)
                                     {
-                                        nickFound = false;
-                                        nick = new Nick();
-                                    }
-                                    nick.Nickname = nickname;
-                                    nick.Host = host;
-                                    nick.Realname = realname;
-                                    nick.Username = username;
-                                    nick.Modes = new List<UserMode>();
-                                    nick.Privileges = new List<PrivilegeMode>();
-                                    char[] modeArr = modeString.ToCharArray();
-                                    for (int i = 1; i <= modeArr.GetUpperBound(0); i++)
-                                    {
-                                        if (PrivilegeMapping.ContainsKey(modeArr[i].ToString()))
+                                        Nick nick = channel.GetNick(nickname);
+                                        bool nickFound = true;
+                                        if (nick == null)
                                         {
-                                            nick.Privileges.Add(PrivilegeMapping[modeArr[i].ToString()]);
+                                            nickFound = false;
+                                            nick = new Nick();
                                         }
-                                        else if (modeArr[i].ToString() == "*")
+                                        nick.Nickname = nickname;
+                                        nick.Host = host;
+                                        nick.Realname = realname;
+                                        nick.Username = username;
+                                        nick.Modes = new List<UserMode>();
+                                        nick.Privileges = new List<PrivilegeMode>();
+                                        char[] modeArr = modeString.ToCharArray();
+                                        for (int i = 1; i <= modeArr.GetUpperBound(0); i++)
                                         {
-                                            nick.Modes.Add(UserMode.o);
-                                        }
-                                        else
-                                        {
-                                            UserMode foundMode;
-                                            bool valid = Enum.TryParse(modeArr[i].ToString(), false, out foundMode);
-                                            if (valid)
+                                            if (PrivilegeMapping.ContainsKey(modeArr[i].ToString()))
                                             {
-                                                nick.Modes.Add(foundMode);
+                                                nick.Privileges.Add(PrivilegeMapping[modeArr[i].ToString()]);
+                                            }
+                                            else if (modeArr[i].ToString() == "*")
+                                            {
+                                                nick.Modes.Add(UserMode.o);
+                                            }
+                                            else
+                                            {
+                                                UserMode foundMode;
+                                                bool valid = Enum.TryParse(modeArr[i].ToString(), false, out foundMode);
+                                                if (valid)
+                                                {
+                                                    nick.Modes.Add(foundMode);
+                                                }
                                             }
                                         }
-                                    }
-                                    if (!nickFound)
-                                    {
-                                        channel.AddNick(nick);
+                                        if (!nickFound)
+                                        {
+                                            channel.AddNick(nick);
+                                        }
                                     }
                                 }
                             }
@@ -408,11 +418,14 @@ namespace Combot.IRCServices
                     case IRCReplyCode.RPL_TOPIC:
                         ChannelRWLock.EnterWriteLock();
                         string[] topicSplit = msg.Message.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                        string topicChan = topicSplit[0];
-                        Channel topicChannel = Channels.Find(chan => chan.Name == topicChan);
-                        if (topicChannel != null)
+                        if (topicSplit.GetUpperBound(0) > 0)
                         {
-                            topicChannel.Topic = topicSplit[1].Remove(0, 1);
+                            string topicChan = topicSplit[0];
+                            Channel topicChannel = Channels.Find(chan => chan.Name == topicChan);
+                            if (topicChannel != null)
+                            {
+                                topicChannel.Topic = topicSplit[1].Remove(0, 1);
+                            }
                         }
                         ChannelRWLock.ExitWriteLock();
                         break;
@@ -490,7 +503,7 @@ namespace Combot.IRCServices
                             break;
                     }
                 }
-                SendWho(channel.Name);
+                Command.SendWho(channel.Name);
             }
             ChannelRWLock.ExitWriteLock();
         }
@@ -566,7 +579,7 @@ namespace Combot.IRCServices
                 newChannel.Name = e.Channel;
                 newChannel.Nicks.Add(e.Nick);
                 Channels.Add(newChannel);
-                SendWho(newChannel.Name);
+                Command.SendWho(newChannel.Name);
             }
             ChannelRWLock.ExitWriteLock();
         }

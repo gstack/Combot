@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Combot.IRCServices;
 using Combot.Configurations;
+using Combot.Databases;
 using Combot.IRCServices.Messaging;
 using Combot.Modules;
 
@@ -20,9 +21,12 @@ namespace Combot
         public event Action<BotError> ErrorEvent;
         public ServerConfig ServerConfig;
         public IRC IRC;
+        public Database Database;
         public List<Module> Modules;
         public bool Connected = false;
         public bool LoggedIn = false;
+        public DateTime ConnectionTime;
+        public DateTime LoadTime;
         public Dictionary<PrivilegeMode, AccessType> PrivilegeModeMapping = new Dictionary<PrivilegeMode, AccessType>() { { PrivilegeMode.v, AccessType.Voice }, { PrivilegeMode.h, AccessType.HalfOperator }, { PrivilegeMode.o, AccessType.Operator }, { PrivilegeMode.a, AccessType.SuperOperator }, { PrivilegeMode.q, AccessType.Founder } };
         public Dictionary<ChannelMode, AccessType> ChannelModeMapping = new Dictionary<ChannelMode, AccessType>() { { ChannelMode.v, AccessType.Voice }, { ChannelMode.h, AccessType.HalfOperator }, { ChannelMode.o, AccessType.Operator }, { ChannelMode.a, AccessType.SuperOperator }, { ChannelMode.q, AccessType.Founder } };
 
@@ -38,6 +42,8 @@ namespace Combot
             CurNickChoice = 0;
             RetryCount = 0;
             ServerConfig = serverConfig;
+            LoadTime = DateTime.Now;
+            ConnectionTime = DateTime.Now;
 
             IRC = new IRC(serverConfig.MaxMessageLength, serverConfig.MessageSendDelay);
             IRC.ConnectEvent += HandleConnectEvent;
@@ -50,6 +56,8 @@ namespace Combot
             IRC.Message.KickEvent += HandleKickEvent;
             IRC.Message.ChannelModeChangeEvent += HandleChannelModeChangeEvent;
 
+            Database = new Database(serverConfig.Database);
+
             LoadModules();
         }
 
@@ -58,6 +66,7 @@ namespace Combot
         /// </summary>
         public void Connect()
         {
+            ConnectionTime = DateTime.Now;
             GhostSent = false;
             CurNickChoice = 0;
             RetryAllowed = ServerConfig.Reconnect;
@@ -121,11 +130,11 @@ namespace Combot
         /// </summary>
         public void Disconnect()
         {
+            RetryAllowed = false;
+            RetryCount = 0;
             IRC.Disconnect();
             Connected = false;
             LoggedIn = false;
-            RetryCount = 0;
-            RetryAllowed = false;
         }
 
         private void Reconnect()
@@ -288,6 +297,25 @@ namespace Combot
             ParseCommandMessage(DateTime.Now, message, new Nick { Nickname = IRC.Nickname }, location, type);
         }
 
+        public bool IsCommand(string message)
+        {
+            bool isCommand = false;
+            string[] msgArgs = message.Split(new[] {' '}, 2, StringSplitOptions.RemoveEmptyEntries);
+            string command = msgArgs[0].Remove(0, ServerConfig.CommandPrefix.Length);
+            // Find the module that contains the command
+            Module module = Modules.Find(mod => mod.Commands.Exists(c => c.Triggers.Contains(command)) && mod.Loaded && mod.Enabled);
+            if (module != null)
+            {
+                // Find the command
+                Command cmd = module.Commands.Find(c => c.Triggers.Contains(command));
+                if (cmd != null)
+                {
+                    isCommand = true;
+                }
+            }
+            return isCommand;
+        }
+
         private void HandleJoinEvent(object sender, JoinChannelInfo info)
         {
             if (info.Nick.Nickname == IRC.Nickname)
@@ -348,20 +376,20 @@ namespace Combot
                         LoggedIn = true;
                         if (!GhostSent && IRC.Nickname != ServerConfig.Nicknames[CurNickChoice])
                         {
-                            IRC.SendPrivateMessage("NickServ", string.Format("GHOST {0} {1}", ServerConfig.Nicknames[CurNickChoice], ServerConfig.Password));
+                            IRC.Command.SendPrivateMessage("NickServ", string.Format("GHOST {0} {1}", ServerConfig.Nicknames[CurNickChoice], ServerConfig.Password));
                             Thread.Sleep(1000);
-                            IRC.SendNick(ServerConfig.Nicknames[CurNickChoice]);
+                            IRC.Command.SendNick(ServerConfig.Nicknames[CurNickChoice]);
                             GhostSent = true;
                         }
                         // Identify to NickServ if need be
-                        IRC.SendPrivateMessage("NickServ", string.Format("IDENTIFY {0}", ServerConfig.Password));
+                        IRC.Command.SendPrivateMessage("NickServ", string.Format("IDENTIFY {0}", ServerConfig.Password));
 
                         // Join all required channels
                         // Delay joining channels for configured time
                         Thread.Sleep(ServerConfig.JoinDelay);
                         foreach (ChannelConfig channel in ServerConfig.Channels)
                         {
-                            IRC.SendJoin(channel.Name, channel.Key);
+                            IRC.Command.SendJoin(channel.Name, channel.Key);
                         }
                         break;
                 }
@@ -374,7 +402,7 @@ namespace Combot
                     case IRCErrorCode.ERR_NOTREGISTERED:
                         if (ServerConfig.AutoRegister && ServerConfig.Password != string.Empty && ServerConfig.Email != string.Empty)
                         {
-                            IRC.SendPrivateMessage("NickServ", string.Format("REGISTER {0} {1}", ServerConfig.Password, ServerConfig.Email));
+                            IRC.Command.SendPrivateMessage("NickServ", string.Format("REGISTER {0} {1}", ServerConfig.Password, ServerConfig.Email));
                         }
                         break;
                     case IRCErrorCode.ERR_NICKNAMEINUSE:
@@ -451,7 +479,7 @@ namespace Combot
             argsOnly.RemoveAt(0);
 
             // Find the module that contains the command
-            Module module = Modules.Find(mod => mod.Commands.Exists(c => c.Triggers.Contains(command)) && mod.Loaded);
+            Module module = Modules.Find(mod => mod.Commands.Exists(c => c.Triggers.Contains(command)) && mod.Loaded && mod.Enabled);
             if (module != null)
             {
                 // Find the command
@@ -475,9 +503,9 @@ namespace Combot
                     {
                         string whoStyle = string.Format(@"[^\s]+\s[^\s]+\s[^\s]+\s[^\s]+\s({0})\s(?<Modes>[^\s]+)\s:[\d]\s(.+)", newCommand.Nick.Nickname);
                         Regex whoRegex = new Regex(whoStyle);
-                        IRC.SendWho(newCommand.Nick.Nickname);
+                        IRC.Command.SendWho(newCommand.Nick.Nickname);
                         ServerReplyMessage whoReply = IRC.Message.GetServerReply(IRCReplyCode.RPL_WHOREPLY, whoStyle);
-                        if (whoReply.ReplyCode != 0)
+                        if (whoReply != null && whoReply.ReplyCode != 0)
                         {
                             Match whoMatch = whoRegex.Match(whoReply.Message);
 
@@ -543,16 +571,7 @@ namespace Combot
                                     return argString;
                                 })));
                                 string invalidMessage = string.Format("Invalid value for \u0002{0}\u0002 in \u0002{1}{2}\u0002{3}.  Valid options are \u0002{4}\u0002.", validArguments[i].Name, ServerConfig.CommandPrefix, command, argHelp, string.Join(", ", validArguments[i].AllowedValues));
-                                switch (messageType)
-                                {
-                                    case MessageType.Channel:
-                                    case MessageType.Query:
-                                        IRC.SendPrivateMessage(location, invalidMessage);
-                                        break;
-                                    case MessageType.Notice:
-                                        IRC.SendNotice(location, invalidMessage);
-                                        break;
-                                }
+                                module.SendResponse(messageType, location, sender.Nickname, invalidMessage);       
                                 break;
                             }
                         }
@@ -591,14 +610,7 @@ namespace Combot
                             return argString;
                         })));
                         string missingArgument = string.Format("Missing a required argument for \u0002{0}{1}\u0002{2}.  The required arguments are \u0002{3}\u0002.", ServerConfig.CommandPrefix, command, argHelp, string.Join(", ", validArguments.Where(arg => arg.Required).Select(arg => arg.Name)));
-                        if (messageType == MessageType.Channel || messageType == MessageType.Query)
-                        {
-                            IRC.SendPrivateMessage(location, missingArgument);
-                        }
-                        else if (messageType == MessageType.Notice)
-                        {
-                            IRC.SendNotice(location, missingArgument);
-                        }
+                        module.SendResponse(messageType, location, sender.Nickname, missingArgument);
                     }
 
                 }

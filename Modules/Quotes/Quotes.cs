@@ -41,59 +41,25 @@ namespace Combot.Modules.Plugins
                 int index = randNum.Next(results.Count - 1);
                 Dictionary<string, object> quote = results[index];
                 string quoteMessage = string.Format("[{0}] {1}", quote["nickname"], quote["message"]);
-                switch (command.MessageType)
-                {
-                    case MessageType.Channel:
-                        Bot.IRC.SendPrivateMessage(command.Location, quoteMessage);
-                        break;
-                    case MessageType.Query:
-                        Bot.IRC.SendPrivateMessage(command.Nick.Nickname, quoteMessage);
-                        break;
-                    case MessageType.Notice:
-                        Bot.IRC.SendNotice(command.Nick.Nickname, quoteMessage);
-                        break;
-                }
+                SendResponse(command.MessageType, command.Location, command.Nick.Nickname, quoteMessage);
             }
             else
             {
                 if (command.Arguments.ContainsKey("Nickname"))
                 {
                     string quoteMessage = string.Format("There are no quotes for \u0002{0}\u0002", command.Arguments["Nickname"]);
-                    switch (command.MessageType)
-                    {
-                        case MessageType.Channel:
-                            Bot.IRC.SendPrivateMessage(command.Location, quoteMessage);
-                            break;
-                        case MessageType.Query:
-                            Bot.IRC.SendPrivateMessage(command.Nick.Nickname, quoteMessage);
-                            break;
-                        case MessageType.Notice:
-                            Bot.IRC.SendNotice(command.Nick.Nickname, quoteMessage);
-                            break;
-                    }
+                    SendResponse(command.MessageType, command.Location, command.Nick.Nickname, quoteMessage);
                 }
                 else
                 {
                     string quoteMessage = string.Format("There are no quotes for \u0002{0}\u0002.", channel);
-                    switch (command.MessageType)
-                    {
-                        case MessageType.Channel:
-                            Bot.IRC.SendPrivateMessage(command.Location, quoteMessage);
-                            break;
-                        case MessageType.Query:
-                            Bot.IRC.SendPrivateMessage(command.Nick.Nickname, quoteMessage);
-                            break;
-                        case MessageType.Notice:
-                            Bot.IRC.SendNotice(command.Nick.Nickname, quoteMessage);
-                            break;
-                    }
+                    SendResponse(command.MessageType, command.Location, command.Nick.Nickname, quoteMessage);
                 }
             }
         }
 
         private List<Dictionary<string, object>> GetQuoteList(string channel)
         {
-            Database database = new Database(Bot.ServerConfig.Database);
             string search = "SELECT `channelmessages`.`message`, `nicks`.`nickname` FROM `channelmessages` " +
                             "INNER JOIN `nicks` " +
                             "ON `channelmessages`.`nick_id` = `nicks`.`id` " +
@@ -102,12 +68,11 @@ namespace Combot.Modules.Plugins
                             "INNER JOIN `servers` " +
                             "ON `channelmessages`.`server_id` = `servers`.`id` " +
                             "WHERE `servers`.`name` = {0} AND `channels`.`name` = {1}";
-            return database.Query(search, new object[] { Bot.ServerConfig.Name, channel });
+            return Bot.Database.Query(search, new object[] { Bot.ServerConfig.Name, channel });
         }
 
         private List<Dictionary<string, object>> GetQuoteList(string channel, string nickname)
         {
-            Database database = new Database(Bot.ServerConfig.Database);
             string search = "SELECT `channelmessages`.`message`, `nicks`.`nickname` FROM `channelmessages` " +
                             "INNER JOIN `nicks` " +
                             "ON `channelmessages`.`nick_id` = `nicks`.`id` " +
@@ -116,7 +81,7 @@ namespace Combot.Modules.Plugins
                             "INNER JOIN `servers` " +
                             "ON `channelmessages`.`server_id` = `servers`.`id` " +
                             "WHERE `servers`.`name` = {0} AND `channels`.`name` = {1} AND `nicks`.`nickname` = {2}";
-            return database.Query(search, new object[] { Bot.ServerConfig.Name, channel, nickname });
+            return Bot.Database.Query(search, new object[] { Bot.ServerConfig.Name, channel, nickname });
         }
     }
 }

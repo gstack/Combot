@@ -56,6 +56,7 @@ namespace Combot.Modules
         {
             // Check to make sure the command exists, the nick or channel isn't on a blacklist, and the module is loaded.
             if (Loaded
+                && Enabled
                 && !ChannelBlacklist.Contains(command.Location)
                 && !NickBlacklist.Contains(command.Nick.Nickname)
                 && Commands.Exists(c => c.Triggers.Contains(command.Command)
@@ -85,18 +86,7 @@ namespace Combot.Modules
                 else
                 {
                     string noAccessMessage = string.Format("You do not have access to use \u0002{0}\u000F.", command.Command);
-                    switch (command.MessageType)
-                    {
-                        case MessageType.Channel:
-                            Bot.IRC.SendPrivateMessage(command.Location, noAccessMessage);
-                            break;
-                        case MessageType.Query:
-                            Bot.IRC.SendPrivateMessage(command.Nick.Nickname, noAccessMessage);
-                            break;
-                        case MessageType.Notice:
-                            Bot.IRC.SendNotice(command.Nick.Nickname, noAccessMessage);
-                            break;
-                    }
+                    SendResponse(command.MessageType, command.Location, command.Nick.Nickname, noAccessMessage);
                 }
             }
         }
@@ -165,6 +155,7 @@ namespace Combot.Modules
                     newModule = (Module)Activator.CreateInstance(t);
                     newModule.Copy(this);
                     newModule.Loaded = true;
+                    newModule.ConfigPath = ConfigPath;
                     newModule.Bot = bot;
                     newModule.Initialize();
                 }
@@ -173,9 +164,9 @@ namespace Combot.Modules
             return newModule;
         }
 
-        public dynamic GetOptionValue(string name)
+        public object GetOptionValue(string name)
         {
-            dynamic foundValue = null;
+            object foundValue = null;
             Option foundOption = Options.Find(opt => opt.Name == name);
             if (foundOption != null)
             {
@@ -230,65 +221,77 @@ namespace Combot.Modules
 
         public void AddServer()
         {
-            Database database = new Database(Bot.ServerConfig.Database);
             string search = "SELECT * FROM `servers` WHERE " +
                             "`name` = {0}";
-            List<Dictionary<string, object>> results = database.Query(search, new object[] { Bot.ServerConfig.Name });
+            List<Dictionary<string, object>> results = Bot.Database.Query(search, new object[] { Bot.ServerConfig.Name });
 
             if (!results.Any())
             {
                 string query = "INSERT INTO `servers` SET " +
                                "`name` = {0}";
-                database.Execute(query, new object[] { Bot.ServerConfig.Name });
+                Bot.Database.Execute(query, new object[] { Bot.ServerConfig.Name });
             }
         }
 
         public void AddChannel(string channel)
         {
-            Database database = new Database(Bot.ServerConfig.Database);
             string search = "SELECT * FROM `channels` WHERE " +
                             "`server_id` = (SELECT `id` FROM `servers` WHERE `name` = {0}) AND " +
                             "`name` = {1}";
-            List<Dictionary<string, object>> results = database.Query(search, new object[] { Bot.ServerConfig.Name, channel });
+            List<Dictionary<string, object>> results = Bot.Database.Query(search, new object[] { Bot.ServerConfig.Name, channel });
 
             if (!results.Any())
             {
                 string query = "INSERT INTO `channels` SET " +
                                "`server_id` = (SELECT `id` FROM `servers` WHERE `name` = {0}), " +
                                "`name` = {1}";
-                database.Execute(query, new object[] { Bot.ServerConfig.Name, channel });
+                Bot.Database.Execute(query, new object[] { Bot.ServerConfig.Name, channel });
             }
         }
 
         public void AddNick(string nickname)
         {
-            Database database = new Database(Bot.ServerConfig.Database);
             string search = "SELECT * FROM `nicks` WHERE " +
                             "`server_id` = (SELECT `id` FROM `servers` WHERE `name` = {0}) AND " +
                             "`nickname` = {1}";
-            List<Dictionary<string, object>> results = database.Query(search, new object[] { Bot.ServerConfig.Name, nickname });
+            List<Dictionary<string, object>> results = Bot.Database.Query(search, new object[] { Bot.ServerConfig.Name, nickname });
 
             if (!results.Any())
             {
                 string insert = "INSERT INTO `nicks` SET " +
                                 "`server_id` = (SELECT `id` FROM `servers` WHERE `name` = {0}), " +
                                 "`nickname` = {1}";
-                database.Execute(insert, new object[] { Bot.ServerConfig.Name, nickname });
+                Bot.Database.Execute(insert, new object[] { Bot.ServerConfig.Name, nickname });
             }
         }
 
         public string GetNickname(int id)
         {
-            Database database = new Database(Bot.ServerConfig.Database);
             string search = "SELECT `nickname` FROM `nicks` " +
                             "WHERE `id` = {0}";
-            List<Dictionary<string, object>> results = database.Query(search, new object[] { id });
+            List<Dictionary<string, object>> results = Bot.Database.Query(search, new object[] { id });
             string nickname = string.Empty;
             if (results.Any())
             {
                 nickname = results.First()["nickname"].ToString();
             }
             return nickname;
+        }
+
+        public void SendResponse(MessageType messageType, string location, string nickname, string message)
+        {
+            switch (messageType)
+            {
+                case MessageType.Channel:
+                    Bot.IRC.Command.SendPrivateMessage(location, message);
+                    break;
+                case MessageType.Query:
+                    Bot.IRC.Command.SendPrivateMessage(nickname, message);
+                    break;
+                case MessageType.Notice:
+                    Bot.IRC.Command.SendNotice(nickname, message);
+                    break;
+            }
         }
     }
 }

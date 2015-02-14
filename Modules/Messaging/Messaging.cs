@@ -33,33 +33,45 @@ namespace Combot.Modules.Plugins
 
         private void HandleChannelMessage(object sender, ChannelMessage message)
         {
-            CheckMessages(message.Sender.Nickname);
+            if (Enabled)
+            {
+                CheckMessages(message.Sender.Nickname);
+            }
         }
 
         private void HandlePrivateMessage(object sender, PrivateMessage message)
         {
-            CheckMessages(message.Sender.Nickname);
+            if (Enabled)
+            {
+                CheckMessages(message.Sender.Nickname);
+            }
         }
 
         private void HandleChannelNotice(object sender, ChannelNotice message)
         {
-            CheckMessages(message.Sender.Nickname);
+            if (Enabled)
+            {
+                CheckMessages(message.Sender.Nickname);
+            }
         }
 
         private void HandlePrivateNotice(object sender, PrivateNotice message)
         {
-            CheckMessages(message.Sender.Nickname);
+            if (Enabled)
+            {
+                CheckMessages(message.Sender.Nickname);
+            }
         }
 
         private void AddMessage(CommandMessage command, bool anonymous = false)
         {
             List<Dictionary<string, object>> currentMessages = GetSentMessages(command.Arguments["Nickname"]);
             int numMessages = currentMessages.Select(msg => GetNickname((int) msg["nick_id"]) == command.Nick.Nickname).Count();
-            if (numMessages < GetOptionValue("Max Messages"))
+            int maxMessages = Convert.ToInt32(GetOptionValue("Max Messages"));
+            if (numMessages < maxMessages)
             {
                 AddNick(command.Nick.Nickname);
                 AddNick(command.Arguments["Nickname"]);
-                Database database = new Database(Bot.ServerConfig.Database);
                 string query = "INSERT INTO `messages` SET " +
                                "`server_id` = (SELECT `id` FROM `servers` WHERE `name` = {0}), " +
                                "`nick_id` = (SELECT `nicks`.`id` FROM `nicks` INNER JOIN `servers` ON `servers`.`id` = `nicks`.`server_id` WHERE `servers`.`name` = {1} && `nickname` = {2}), " +
@@ -67,36 +79,14 @@ namespace Combot.Modules.Plugins
                                "`message` = {5}, " +
                                "`anonymous` = {6}, " +
                                "`date_posted` = {7}";
-                database.Execute(query, new object[] { Bot.ServerConfig.Name, Bot.ServerConfig.Name, command.Arguments["Nickname"], Bot.ServerConfig.Name, command.Nick.Nickname, command.Arguments["Message"], anonymous, command.TimeStamp });
+                Bot.Database.Execute(query, new object[] { Bot.ServerConfig.Name, Bot.ServerConfig.Name, command.Arguments["Nickname"], Bot.ServerConfig.Name, command.Nick.Nickname, command.Arguments["Message"], anonymous, command.TimeStamp });
                 string message = string.Format("I will send your message to \u0002{0}\u0002 as soon as I see them.", command.Arguments["Nickname"]);
-                switch (command.MessageType)
-                {
-                    case MessageType.Channel:
-                        Bot.IRC.SendPrivateMessage(command.Location, message);
-                        break;
-                    case MessageType.Query:
-                        Bot.IRC.SendPrivateMessage(command.Nick.Nickname, message);
-                        break;
-                    case MessageType.Notice:
-                        Bot.IRC.SendNotice(command.Nick.Nickname, message);
-                        break;
-                }
+                SendResponse(command.MessageType, command.Location, command.Nick.Nickname, message);
             }
             else
             {
                 string maxMessage = string.Format("You already have sent the maximum number of messages to \u0002{0}\u0002.  Wait until they have read their messages before sending another.");
-                switch (command.MessageType)
-                {
-                    case MessageType.Channel:
-                        Bot.IRC.SendPrivateMessage(command.Location, maxMessage);
-                        break;
-                    case MessageType.Query:
-                        Bot.IRC.SendPrivateMessage(command.Nick.Nickname, maxMessage);
-                        break;
-                    case MessageType.Notice:
-                        Bot.IRC.SendNotice(command.Nick.Nickname, maxMessage);
-                        break;
-                }
+                SendResponse(command.MessageType, command.Location, command.Nick.Nickname, maxMessage);
             }
         }
 
@@ -111,15 +101,15 @@ namespace Combot.Modules.Plugins
                     string message = receivedMessages[i]["message"].ToString();
                     if ((bool) receivedMessages[i]["anonymous"])
                     {
-                        Bot.IRC.SendPrivateMessage(nickname, string.Format("An anonymous sender has left you a message on \u0002{0}\u0002", dateSent.ToString("MMMM d, yyyy h:mm:ss tt")));
-                        Bot.IRC.SendPrivateMessage(nickname, string.Format("\"{0}\"", message));
+                        Bot.IRC.Command.SendPrivateMessage(nickname, string.Format("An anonymous sender has left you a message on \u0002{0}\u0002", dateSent.ToString("MMMM d, yyyy h:mm:ss tt")));
+                        Bot.IRC.Command.SendPrivateMessage(nickname, string.Format("\"{0}\"", message));
                     }
                     else
                     {
                         string sentNick = GetNickname((int) receivedMessages[i]["sender_nick_id"]);
-                        Bot.IRC.SendPrivateMessage(nickname, string.Format("\u0002{0}\u0002 has left you a message on \u0002{1}\u0002", sentNick, dateSent.ToString("MMMM d, yyyy h:mm:ss tt")));
-                        Bot.IRC.SendPrivateMessage(nickname, string.Format("\"{0}\"", message));
-                        Bot.IRC.SendPrivateMessage(nickname, string.Format("If you would like to reply to them, please type \u0002{0}{1} {2} \u001FMessage\u001F\u0002", Bot.ServerConfig.CommandPrefix, Commands.Find(cmd => cmd.Name == "Message").Triggers.First(), sentNick));
+                        Bot.IRC.Command.SendPrivateMessage(nickname, string.Format("\u0002{0}\u0002 has left you a message on \u0002{1}\u0002", sentNick, dateSent.ToString("MMMM d, yyyy h:mm:ss tt")));
+                        Bot.IRC.Command.SendPrivateMessage(nickname, string.Format("\"{0}\"", message));
+                        Bot.IRC.Command.SendPrivateMessage(nickname, string.Format("If you would like to reply to them, please type \u0002{0}{1} {2} \u001FMessage\u001F\u0002", Bot.ServerConfig.CommandPrefix, Commands.Find(cmd => cmd.Name == "Message").Triggers.First(), sentNick));
                     }
                     DeleteMessage((int) receivedMessages[i]["id"]);
                 }
@@ -128,34 +118,31 @@ namespace Combot.Modules.Plugins
 
         private List<Dictionary<string, object>> GetSentMessages(string nick)
         {
-            Database database = new Database(Bot.ServerConfig.Database);
             string search = "SELECT `messages`.`message`, `messages`.`nick_id`, `messages`.`date_posted`, `messages`.`anonymous` FROM `messages` " +
                             "INNER JOIN `nicks` " +
                             "ON `messages`.`sender_nick_id` = `nicks`.`id` " +
                             "INNER JOIN `servers` " +
                             "ON `messages`.`server_id` = `servers`.`id` " +
                             "WHERE `servers`.`name` = {0} AND `nicks`.`nickname` = {1}";
-            return database.Query(search, new object[] { Bot.ServerConfig.Name, nick });
+            return Bot.Database.Query(search, new object[] { Bot.ServerConfig.Name, nick });
         }
 
         private List<Dictionary<string, object>> GetReceivedMessages(string nick)
         {
-            Database database = new Database(Bot.ServerConfig.Database);
             string search = "SELECT `messages`.`id`, `messages`.`message`, `messages`.`sender_nick_id`, `messages`.`date_posted`, `messages`.`anonymous` FROM `messages` " +
                             "INNER JOIN `nicks` " +
                             "ON `messages`.`nick_id` = `nicks`.`id` " +
                             "INNER JOIN `servers` " +
                             "ON `messages`.`server_id` = `servers`.`id` " +
                             "WHERE `servers`.`name` = {0} AND `nicks`.`nickname` = {1}";
-            return database.Query(search, new object[] { Bot.ServerConfig.Name, nick });
+            return Bot.Database.Query(search, new object[] { Bot.ServerConfig.Name, nick });
         }
 
         private void DeleteMessage(int messageId)
         {
-            Database database = new Database(Bot.ServerConfig.Database);
             string query = "DELETE FROM `messages` " +
                            "WHERE `id` = {0}";
-            database.Execute(query, new object[] { messageId });
+            Bot.Database.Execute(query, new object[] { messageId });
         }
     }
 }

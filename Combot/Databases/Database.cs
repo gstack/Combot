@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Threading;
 using Combot.Configurations;
 using MySql.Data.MySqlClient;
 
@@ -9,42 +10,61 @@ namespace Combot.Databases
     {
         private bool Connected { get; set; }
         private MySqlConnection Connection { get; set; }
+        private ReaderWriterLockSlim DatabaseLock { get; set; }
 
         public Database(DatabaseConfig config)
         {
             Connected = false;
             Connection = null;
+            DatabaseLock = new ReaderWriterLockSlim();
             Connect(config);
         }
 
         public List<Dictionary<string, object>> Query(string query, params object[] args)
         {
-            MySqlCommand cmd = PrepareQuery(query, args);
-            MySqlDataReader reader = cmd.ExecuteReader();
             List<Dictionary<string, object>> rows = new List<Dictionary<string, object>>();
-            while (reader.Read())
+            if (Connected)
             {
-                Dictionary<string, object> row = new Dictionary<string, object>();
-                for (int i = 0; i < reader.FieldCount; i++)
+                DatabaseLock.EnterWriteLock();
+                MySqlCommand cmd = PrepareQuery(query, args);
+                MySqlDataReader reader = cmd.ExecuteReader();
+                while (reader.Read())
                 {
-                    row.Add(reader.GetName(i), reader.GetValue(i));
+                    Dictionary<string, object> row = new Dictionary<string, object>();
+                    for (int i = 0; i < reader.FieldCount; i++)
+                    {
+                        row.Add(reader.GetName(i), reader.GetValue(i));
+                    }
+                    rows.Add(row);
                 }
-                rows.Add(row);
+                reader.Close();
+                DatabaseLock.ExitWriteLock();
             }
-            reader.Close();
             return rows;
         }
 
         public object ScalarQuery(string query, params object[] args)
         {
-            MySqlCommand cmd = PrepareQuery(query, args);
-            return cmd.ExecuteScalar();
+            if (Connected)
+            {
+                DatabaseLock.EnterWriteLock();
+                MySqlCommand cmd = PrepareQuery(query, args);
+                object result = cmd.ExecuteScalar();
+                DatabaseLock.ExitWriteLock();
+                return result;
+            }
+            return null;
         }
 
         public void Execute(string query, params object[] args)
         {
-            MySqlCommand cmd = PrepareQuery(query, args);
-            cmd.ExecuteNonQuery();
+            if (Connected)
+            {
+                DatabaseLock.EnterWriteLock();
+                MySqlCommand cmd = PrepareQuery(query, args);
+                int result = cmd.ExecuteNonQuery();
+                DatabaseLock.ExitWriteLock();
+            }
         }
 
         private void Connect(DatabaseConfig config)
@@ -72,6 +92,7 @@ namespace Combot.Databases
         {
             if (Connection != null && Connected)
             {
+                Connected = false;
                 Connection.Close();
             }
         }

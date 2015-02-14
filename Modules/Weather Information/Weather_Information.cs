@@ -43,14 +43,17 @@ namespace Combot.Modules.Plugins
             XmlNodeList nodes2 = doc2.SelectNodes("/current_observation");
 
             string location = "";
-            if (nodes2.Count > 0)
+            if (nodes2 != null && nodes2.Count > 0)
             {
                 foreach (XmlNode node2 in nodes2)
                 {
                     XmlNodeList sub_node2 = doc2.SelectNodes("/current_observation/display_location");
-                    foreach (XmlNode xn2 in sub_node2)
+                    if (sub_node2 != null)
                     {
-                        location = xn2["full"].InnerText;
+                        foreach (XmlNode xn2 in sub_node2)
+                        {
+                            location = xn2["full"].InnerText;
+                        }
                     }
                 }
             }
@@ -75,11 +78,11 @@ namespace Combot.Modules.Plugins
                     string startMsg = string.Format("{0} day forecast for {1}", days, command.Arguments["Location"]);
                     if (command.MessageType == MessageType.Channel || command.MessageType == MessageType.Notice)
                     {
-                        Bot.IRC.SendNotice(command.Nick.Nickname, startMsg);
+                        Bot.IRC.Command.SendNotice(command.Nick.Nickname, startMsg);
                     }
                     else
                     {
-                        Bot.IRC.SendPrivateMessage(command.Nick.Nickname, startMsg);
+                        Bot.IRC.Command.SendPrivateMessage(command.Nick.Nickname, startMsg);
                     }
                     int index = 0;
                     foreach (XmlNode node in nodes)
@@ -97,11 +100,11 @@ namespace Combot.Modules.Plugins
                                 string forecastMsg = string.Format("{0}: {1} with a high of {2} F ({3} C) and a low of {4} F ({5} C).", weekday, conditions, highf, highc, lowf, lowc);
                                 if (command.MessageType == MessageType.Channel || command.MessageType == MessageType.Notice)
                                 {
-                                    Bot.IRC.SendNotice(command.Nick.Nickname, forecastMsg);
+                                    Bot.IRC.Command.SendNotice(command.Nick.Nickname, forecastMsg);
                                 }
                                 else
                                 {
-                                    Bot.IRC.SendPrivateMessage(command.Nick.Nickname, forecastMsg);
+                                    Bot.IRC.Command.SendPrivateMessage(command.Nick.Nickname, forecastMsg);
                                 }
                             }
                             index++;
@@ -111,27 +114,13 @@ namespace Combot.Modules.Plugins
                 else
                 {
                     string noWeather = string.Format("No weather information available for \u0002{0}\u000F", command.Arguments["Location"]);
-                    if (command.MessageType == MessageType.Channel || command.MessageType == MessageType.Notice)
-                    {
-                        Bot.IRC.SendNotice(command.Nick.Nickname, noWeather);
-                    }
-                    else
-                    {
-                        Bot.IRC.SendPrivateMessage(command.Nick.Nickname, noWeather);
-                    }
+                    SendResponse(command.MessageType, command.Location, command.Nick.Nickname, noWeather);
                 }
             }
             else
             {
                 string noWeather = string.Format("No weather information available for \u0002{0}\u000F", command.Arguments["Location"]);
-                if (command.MessageType == MessageType.Channel || command.MessageType == MessageType.Notice)
-                {
-                    Bot.IRC.SendNotice(command.Nick.Nickname, noWeather);
-                }
-                else
-                {
-                    Bot.IRC.SendPrivateMessage(command.Nick.Nickname, noWeather);
-                }
+                SendResponse(command.MessageType, command.Location, command.Nick.Nickname, noWeather);
             }
         }
 
@@ -179,18 +168,7 @@ namespace Combot.Modules.Plugins
             {
                 weatherMsg = string.Format("No weather information available for \u0002{0}\u000F", command.Arguments["Location"]);
             }
-            if (command.MessageType == MessageType.Channel)
-            {
-                Bot.IRC.SendPrivateMessage(command.Location, weatherMsg);
-            }
-            else if (command.MessageType == MessageType.Notice)
-            {
-                Bot.IRC.SendNotice(command.Nick.Nickname, weatherMsg);
-            }
-            else if (command.MessageType == MessageType.Query)
-            {
-                Bot.IRC.SendPrivateMessage(command.Nick.Nickname, weatherMsg);
-            }
+            SendResponse(command.MessageType, command.Location, command.Nick.Nickname, weatherMsg);
         }
     }
 }
